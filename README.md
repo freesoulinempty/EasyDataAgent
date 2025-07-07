@@ -14,7 +14,7 @@ A data analysis agent for fast development and secure local deployment. Analyze 
 ## Tech Stack
 
 **Backend**: LangGraph, LangChain, DeepSeek, Python, pandas, matplotlib, PyMySQL  
-**Frontend**: Next.js, TypeScript, Tailwind CSS, React
+**Frontend**: agent-chat-ui
 
 ## Quick Start
 
