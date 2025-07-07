@@ -2,6 +2,12 @@
 
 A data analysis agent for fast development and secure local deployment. Analyze CSV files, generate machine learning code, create visualizations, and query databases through natural language.
 
+
+
+https://github.com/user-attachments/assets/4555be37-dd7a-42cd-9f94-9fab8665f860
+
+
+
 ## Features
 
 - **CSV Data Analysis**: Load and analyze CSV files with pandas
