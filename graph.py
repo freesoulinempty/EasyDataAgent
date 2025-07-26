@@ -1,6 +1,6 @@
 import os
 from dotenv import load_dotenv 
-from langchain_deepseek import ChatDeepSeek
+from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
@@ -11,6 +11,11 @@ import seaborn as sns
 import pandas as pd
 import pymysql
 from langchain_tavily import TavilySearch
+from datetime import datetime
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib import colors
 
 # Load environment variables / 加载环境变量
 load_dotenv(override=True)
@@ -210,55 +215,566 @@ def fig_inter(py_code: str, fname: str) -> str:
         plt.close('all')
         matplotlib.use(current_backend)
 
-# Create prompt template / 创建提示词模板
-prompt = """
-You are an experienced intelligent data analysis assistant, skilled at helping users efficiently complete the following tasks:
+# Load prompt from external file / 从外部文件加载提示词
+def load_prompt():
+    try:
+        with open('prompt.txt', 'r', encoding='utf-8') as f:
+            return f.read()
+    except FileNotFoundError:
+        # Fallback prompt if file not found
+        return """
+        You are EasyDataAgent, a professional data analysis consultant with comprehensive analytical capabilities.
+        Use the available tools to help users with data analysis, visualization, and insights.
+        Always be proactive in suggesting relevant tools and providing professional guidance.
+        """
 
-1. **Database Queries:**
-   - When users need to retrieve data from databases or perform SQL queries, call the `sql_inter` tool. This tool has built-in pymysql connection parameters for MySQL databases, including database name, username, password, port, etc. You only need to generate SQL statements based on user requirements.
-   - You need to accurately generate SQL statements based on user requests, such as `SELECT * FROM table_name` or queries with conditions.
+prompt = load_prompt()
 
-2. **Data Table Extraction:**
-   - When users want to import database tables into Python environment for subsequent analysis, call the `extract_data` tool.
-   - You need to generate SQL query statements based on table names or query conditions provided by users, and save the data to specified pandas variables.
+# Create data export tool / 创建数据导出工具
+class DataExportSchema(BaseModel):
+    df_name: str = Field(description="Name of the pandas DataFrame variable to export")
+    format_type: str = Field(description="Export format: 'excel', 'json', or 'pdf'")
+    filename: str = Field(description="Output filename (without extension)")
 
-3. **Non-plotting Python Code Execution:**
-   - When users need to execute Python scripts or perform data processing and statistical calculations, call the `python_inter` tool.
-   - Limited to executing non-plotting code, such as variable definitions, data analysis, etc.
+@tool(args_schema=DataExportSchema)
+def export_data(df_name: str, format_type: str, filename: str) -> str:
+    """
+    Export pandas DataFrame to various formats (Excel, JSON, PDF).
+    Supports exporting analysis results to different file formats for sharing and reporting.
+    
+    :param df_name: Name of the pandas DataFrame variable to export
+    :param format_type: Export format - 'excel', 'json', or 'pdf'
+    :param filename: Output filename without extension
+    :return: Export status and file path
+    """
+    try:
+        # Get DataFrame from global variables
+        g = globals()
+        if df_name not in g:
+            return f"Error: DataFrame '{df_name}' not found. Please extract or create the DataFrame first."
+        
+        df = g[df_name]
+        if not isinstance(df, pd.DataFrame):
+            return f"Error: '{df_name}' is not a pandas DataFrame."
+        
+        # Set base directory for exports
+        base_dir = r"/Users/gufang/Documents/GitHub/EasyDataAgent/agent-chat-ui-main/public"
+        exports_dir = os.path.join(base_dir, "exports")
+        os.makedirs(exports_dir, exist_ok=True)
+        
+        if format_type.lower() == 'excel':
+            file_path = os.path.join(exports_dir, f"{filename}.xlsx")
+            df.to_excel(file_path, index=True, engine='openpyxl')
+            rel_path = os.path.join("exports", f"{filename}.xlsx")
+            return f"Excel file exported successfully: {rel_path}"
+            
+        elif format_type.lower() == 'json':
+            file_path = os.path.join(exports_dir, f"{filename}.json")
+            df.to_json(file_path, orient='records', date_format='iso', indent=2)
+            rel_path = os.path.join("exports", f"{filename}.json")
+            return f"JSON file exported successfully: {rel_path}"
+            
+        elif format_type.lower() == 'pdf':
+            file_path = os.path.join(exports_dir, f"{filename}.pdf")
+            
+            # Create PDF document
+            doc = SimpleDocTemplate(file_path, pagesize=letter)
+            elements = []
+            styles = getSampleStyleSheet()
+            
+            # Add title
+            title = Paragraph(f"Data Export: {df_name}", styles['Title'])
+            elements.append(title)
+            
+            # Add timestamp
+            timestamp = Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", styles['Normal'])
+            elements.append(timestamp)
+            
+            # Convert DataFrame to table data (limit rows for PDF)
+            data = [df.columns.tolist()]
+            max_rows = min(50, len(df))  # Limit to 50 rows for PDF
+            for _, row in df.head(max_rows).iterrows():
+                data.append([str(x) for x in row.tolist()])
+            
+            # Create table
+            table = Table(data)
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 12),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black)
+            ]))
+            
+            elements.append(table)
+            
+            if len(df) > max_rows:
+                note = Paragraph(f"Note: Only first {max_rows} rows shown. Total rows: {len(df)}", styles['Normal'])
+                elements.append(note)
+            
+            doc.build(elements)
+            rel_path = os.path.join("exports", f"{filename}.pdf")
+            return f"PDF file exported successfully: {rel_path}"
+            
+        else:
+            return f"Error: Unsupported format '{format_type}'. Supported formats: excel, json, pdf"
+            
+    except Exception as e:
+        return f"Export failed: {str(e)}"
 
-4. **Plotting Python Code Execution:**
-   - When users need visualization displays (such as generating charts, plotting distributions), call the `fig_inter` tool.
-   - You can directly read data and create plots without using the `python_inter` tool to read images.
-   - You should write plotting code based on user requirements and correctly specify the plotting object variable name (such as `fig`).
-   - When generating Python plotting code, you must specify the image name, such as fig = plt.figure() or fig = plt.subplots() to create image objects and assign them to fig.
-   - Do not call plt.show(), otherwise the image cannot be saved.
+# Create data preview tool / 创建数据预览工具
+class DataPreviewSchema(BaseModel):
+    df_name: str = Field(description="Name of the pandas DataFrame variable to preview")
+    rows: int = Field(default=10, description="Number of rows to display (default: 10)")
 
-5. **Web Search:**
-   - When users ask questions unrelated to data analysis (such as latest news, real-time information), call the `search_tool`.
+@tool(args_schema=DataPreviewSchema)
+def data_preview(df_name: str, rows: int = 10) -> str:
+    """
+    Generate a comprehensive data preview snapshot including basic info, data types, missing values, and sample data.
+    Perfect for quick data exploration and quality assessment.
+    
+    :param df_name: Name of the pandas DataFrame variable to preview
+    :param rows: Number of sample rows to display (default: 10)
+    :return: Comprehensive data preview report
+    """
+    try:
+        # Get DataFrame from global variables
+        g = globals()
+        if df_name not in g:
+            return f"Error: DataFrame '{df_name}' not found. Please extract or create the DataFrame first."
+        
+        df = g[df_name]
+        if not isinstance(df, pd.DataFrame):
+            return f"Error: '{df_name}' is not a pandas DataFrame."
+        
+        # Generate comprehensive preview
+        preview_report = []
+        preview_report.append(f"=== DATA PREVIEW SNAPSHOT FOR '{df_name}' ===")
+        preview_report.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        preview_report.append("")
+        
+        # Basic information
+        preview_report.append("📊 BASIC INFORMATION:")
+        preview_report.append(f"  • Shape: {df.shape[0]} rows × {df.shape[1]} columns")
+        preview_report.append(f"  • Memory usage: {df.memory_usage(deep=True).sum() / 1024**2:.2f} MB")
+        preview_report.append(f"  • Index type: {type(df.index).__name__}")
+        preview_report.append("")
+        
+        # Data types
+        preview_report.append("🏷️  DATA TYPES:")
+        for col, dtype in df.dtypes.items():
+            preview_report.append(f"  • {col}: {dtype}")
+        preview_report.append("")
+        
+        # Missing values analysis
+        missing = df.isnull().sum()
+        missing_pct = (missing / len(df) * 100).round(2)
+        preview_report.append("❓ MISSING VALUES:")
+        for col in df.columns:
+            if missing[col] > 0:
+                preview_report.append(f"  • {col}: {missing[col]} ({missing_pct[col]}%)")
+        if missing.sum() == 0:
+            preview_report.append("  • No missing values found ✓")
+        preview_report.append("")
+        
+        # Numeric columns summary
+        numeric_cols = df.select_dtypes(include=['number']).columns
+        if len(numeric_cols) > 0:
+            preview_report.append("📈 NUMERIC COLUMNS SUMMARY:")
+            desc = df[numeric_cols].describe()
+            for col in numeric_cols:
+                preview_report.append(f"  • {col}:")
+                preview_report.append(f"    - Range: {desc.loc['min', col]:.2f} to {desc.loc['max', col]:.2f}")
+                preview_report.append(f"    - Mean: {desc.loc['mean', col]:.2f}")
+                preview_report.append(f"    - Std: {desc.loc['std', col]:.2f}")
+            preview_report.append("")
+        
+        # Categorical columns info
+        cat_cols = df.select_dtypes(include=['object', 'category']).columns
+        if len(cat_cols) > 0:
+            preview_report.append("🏷️  CATEGORICAL COLUMNS:")
+            for col in cat_cols:
+                unique_count = df[col].nunique()
+                preview_report.append(f"  • {col}: {unique_count} unique values")
+                if unique_count <= 10:
+                    values = df[col].value_counts().head(5)
+                    preview_report.append(f"    - Top values: {list(values.index)}")
+            preview_report.append("")
+        
+        # Sample data
+        preview_report.append(f"📋 SAMPLE DATA (first {min(rows, len(df))} rows):")
+        sample_data = df.head(rows).to_string(max_cols=10, max_colwidth=20)
+        preview_report.append(sample_data)
+        
+        return "\n".join(preview_report)
+        
+    except Exception as e:
+        return f"Preview generation failed: {str(e)}"
 
-**Tool Usage Priority:**
-- If database data is needed, first use `sql_inter` or `extract_data` to obtain it, then execute Python analysis or plotting.
-- If plotting is needed, first ensure data is loaded as pandas objects.
+# Create chart templates tool / 创建图表模板工具
+class ChartTemplateSchema(BaseModel):
+    df_name: str = Field(description="Name of the pandas DataFrame variable for plotting")
+    chart_type: str = Field(description="Chart type: 'scatter', 'bar', 'heatmap'")
+    x_col: str = Field(description="Column name for X-axis")
+    y_col: str = Field(description="Column name for Y-axis")
+    title: str = Field(default="Chart", description="Chart title")
 
-**Response Requirements:**
-- All responses use **English/Chinese**, clear, polite, and concise, responding in the user's language.
-- If tool calls return structured JSON data, extract key information for brief explanation and display main results.
-- If more information is needed from users, proactively ask clear questions.
-- If generated image files exist, must insert images in Markdown format in responses, such as: ![Categorical Features vs Churn](images/fig.png)
-- Do not output only image path text.
+@tool(args_schema=ChartTemplateSchema)
+def quick_chart(df_name: str, chart_type: str, x_col: str, y_col: str, title: str = "Chart") -> str:
+    """
+    Generate quick charts using predefined templates (scatter plot, bar chart, heatmap).
+    Provides instant visualization with professional styling and automatic layout.
+    
+    :param df_name: Name of the pandas DataFrame variable for plotting
+    :param chart_type: Type of chart - 'scatter', 'bar', or 'heatmap'
+    :param x_col: Column name for X-axis (not used for heatmap)
+    :param y_col: Column name for Y-axis (not used for heatmap)
+    :param title: Chart title
+    :return: Chart generation status and file path
+    """
+    try:
+        # Get DataFrame from global variables
+        g = globals()
+        if df_name not in g:
+            return f"Error: DataFrame '{df_name}' not found. Please extract or create the DataFrame first."
+        
+        df = g[df_name]
+        if not isinstance(df, pd.DataFrame):
+            return f"Error: '{df_name}' is not a pandas DataFrame."
+        
+        # Set up matplotlib for file saving
+        current_backend = matplotlib.get_backend()
+        matplotlib.use('Agg')
+        
+        # Create figure
+        try:
+            plt.style.use('seaborn-v0_8')
+        except:
+            # Fallback to default style if seaborn style fails
+            plt.style.use('default')
+        fig = plt.figure(figsize=(10, 6))
+        
+        if chart_type.lower() == 'scatter':
+            if x_col not in df.columns or y_col not in df.columns:
+                return f"Error: Columns '{x_col}' or '{y_col}' not found in DataFrame"
+            
+            plt.scatter(df[x_col], df[y_col], alpha=0.6, s=50)
+            plt.xlabel(x_col)
+            plt.ylabel(y_col)
+            plt.title(f"{title} - Scatter Plot")
+            plt.grid(True, alpha=0.3)
+            
+        elif chart_type.lower() == 'bar':
+            if x_col not in df.columns or y_col not in df.columns:
+                return f"Error: Columns '{x_col}' or '{y_col}' not found in DataFrame"
+            
+            # For bar charts, group by x_col and aggregate y_col
+            data = df.groupby(x_col)[y_col].mean().sort_values(ascending=False)
+            bars = plt.bar(range(len(data)), data.values)
+            plt.xlabel(x_col)
+            plt.ylabel(f"Average {y_col}")
+            plt.title(f"{title} - Bar Chart")
+            plt.xticks(range(len(data)), data.index, rotation=45, ha='right')
+            
+            # Color bars with gradient
+            colors = plt.cm.viridis([i/len(data) for i in range(len(data))])
+            for bar, color in zip(bars, colors):
+                bar.set_color(color)
+            
+        elif chart_type.lower() == 'heatmap':
+            # For heatmap, use correlation matrix of numeric columns
+            numeric_df = df.select_dtypes(include=['number'])
+            if numeric_df.empty:
+                return "Error: No numeric columns found for heatmap"
+            
+            corr = numeric_df.corr()
+            sns.heatmap(corr, annot=True, cmap='coolwarm', center=0,
+                       square=True, fmt='.2f', cbar_kws={'shrink': 0.8})
+            plt.title(f"{title} - Correlation Heatmap")
+            plt.tight_layout()
+            
+        else:
+            return f"Error: Unsupported chart type '{chart_type}'. Supported types: scatter, bar, heatmap"
+        
+        # Save figure
+        base_dir = r"/Users/gufang/Documents/GitHub/EasyDataAgent/agent-chat-ui-main/public"
+        images_dir = os.path.join(base_dir, "images")
+        os.makedirs(images_dir, exist_ok=True)
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"quick_{chart_type}_{timestamp}.png"
+        abs_path = os.path.join(images_dir, filename)
+        rel_path = os.path.join("images", filename)
+        
+        fig.tight_layout()
+        fig.savefig(abs_path, bbox_inches='tight', dpi=300)
+        
+        return f"Chart saved successfully: {rel_path}"
+        
+    except Exception as e:
+        return f"Chart generation failed: {str(e)}"
+    finally:
+        plt.close('all')
+        matplotlib.use(current_backend)
 
-**Style:**
-- Professional, concise, data-driven.
-- Do not fabricate non-existent tools or data.
+# Create SQL query history tool / 创建SQL查询历史工具
+class QueryHistorySchema(BaseModel):
+    action: str = Field(description="Action: 'save', 'list', 'reuse'")
+    query: str = Field(default="", description="SQL query to save (for 'save' action)")
+    query_id: int = Field(default=0, description="Query ID to reuse (for 'reuse' action)")
+    description: str = Field(default="", description="Description of the query (for 'save' action)")
 
-Please provide precise and efficient assistance to users based on the above principles.
-"""
+@tool(args_schema=QueryHistorySchema)
+def query_history(action: str, query: str = "", query_id: int = 0, description: str = "") -> str:
+    """
+    Manage SQL query history for quick reuse and reference.
+    Save frequently used queries, list query history, and reuse previous queries.
+    
+    :param action: Action to perform - 'save', 'list', or 'reuse'
+    :param query: SQL query string (for 'save' action)
+    :param query_id: ID of query to reuse (for 'reuse' action)
+    :param description: Optional description for the query (for 'save' action)
+    :return: Operation result
+    """
+    try:
+        # History file path
+        base_dir = r"/Users/gufang/Documents/GitHub/EasyDataAgent"
+        history_file = os.path.join(base_dir, "query_history.json")
+        
+        # Load existing history
+        if os.path.exists(history_file):
+            with open(history_file, 'r', encoding='utf-8') as f:
+                history = json.load(f)
+        else:
+            history = {"queries": [], "next_id": 1}
+        
+        if action.lower() == 'save':
+            if not query.strip():
+                return "Error: Query cannot be empty for save action"
+            
+            # Add new query to history
+            new_entry = {
+                "id": history["next_id"],
+                "query": query.strip(),
+                "description": description.strip(),
+                "timestamp": datetime.now().isoformat(),
+                "usage_count": 0
+            }
+            
+            history["queries"].append(new_entry)
+            history["next_id"] += 1
+            
+            # Save updated history
+            with open(history_file, 'w', encoding='utf-8') as f:
+                json.dump(history, f, indent=2, ensure_ascii=False)
+            
+            return f"Query saved successfully with ID: {new_entry['id']}"
+            
+        elif action.lower() == 'list':
+            if not history["queries"]:
+                return "No queries in history"
+            
+            result = ["=== SQL QUERY HISTORY ==="]
+            for entry in sorted(history["queries"], key=lambda x: x["timestamp"], reverse=True):
+                result.append(f"\nID: {entry['id']}")
+                result.append(f"Description: {entry['description'] or 'No description'}")
+                result.append(f"Query: {entry['query'][:100]}{'...' if len(entry['query']) > 100 else ''}")
+                result.append(f"Used: {entry['usage_count']} times")
+                result.append(f"Date: {entry['timestamp'][:19].replace('T', ' ')}")
+            
+            return "\n".join(result)
+            
+        elif action.lower() == 'reuse':
+            if query_id <= 0:
+                return "Error: Please provide a valid query ID for reuse action"
+            
+            # Find query by ID
+            target_query = None
+            for entry in history["queries"]:
+                if entry["id"] == query_id:
+                    target_query = entry
+                    break
+            
+            if not target_query:
+                return f"Error: Query with ID {query_id} not found"
+            
+            # Update usage count
+            target_query["usage_count"] += 1
+            target_query["last_used"] = datetime.now().isoformat()
+            
+            # Save updated history
+            with open(history_file, 'w', encoding='utf-8') as f:
+                json.dump(history, f, indent=2, ensure_ascii=False)
+            
+            return f"Reusing query ID {query_id}:\n{target_query['query']}"
+            
+        else:
+            return f"Error: Invalid action '{action}'. Supported actions: save, list, reuse"
+            
+    except Exception as e:
+        return f"Query history operation failed: {str(e)}"
+
+# Create data quality check tool / 创建数据质量检查工具
+class DataQualitySchema(BaseModel):
+    df_name: str = Field(description="Name of the pandas DataFrame variable to check")
+    check_types: str = Field(default="all", description="Types of checks: 'all', 'missing', 'duplicates', 'outliers', 'types'")
+
+@tool(args_schema=DataQualitySchema)
+def data_quality_check(df_name: str, check_types: str = "all") -> str:
+    """
+    Comprehensive data quality assessment including missing values, duplicates, outliers, and data type issues.
+    Generates detailed quality report with actionable insights.
+    
+    :param df_name: Name of the pandas DataFrame variable to check
+    :param check_types: Types of checks to perform - 'all', 'missing', 'duplicates', 'outliers', 'types'
+    :return: Comprehensive data quality report
+    """
+    try:
+        # Get DataFrame from global variables
+        g = globals()
+        if df_name not in g:
+            return f"Error: DataFrame '{df_name}' not found. Please extract or create the DataFrame first."
+        
+        df = g[df_name]
+        if not isinstance(df, pd.DataFrame):
+            return f"Error: '{df_name}' is not a pandas DataFrame."
+        
+        report = []
+        report.append(f"=== DATA QUALITY REPORT FOR '{df_name}' ===")
+        report.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        report.append(f"Dataset: {df.shape[0]} rows × {df.shape[1]} columns")
+        report.append("")
+        
+        issues_found = 0
+        
+        # Check missing values
+        if check_types.lower() in ['all', 'missing']:
+            report.append("🔍 MISSING VALUES ANALYSIS:")
+            missing = df.isnull().sum()
+            missing_pct = (missing / len(df) * 100).round(2)
+            
+            if missing.sum() == 0:
+                report.append("  ✅ No missing values found")
+            else:
+                issues_found += missing.sum()
+                report.append(f"  ⚠️  Total missing values: {missing.sum()}")
+                for col in df.columns:
+                    if missing[col] > 0:
+                        severity = "🔴" if missing_pct[col] > 50 else "🟡" if missing_pct[col] > 10 else "🟢"
+                        report.append(f"    {severity} {col}: {missing[col]} ({missing_pct[col]}%)")
+            report.append("")
+        
+        # Check duplicates
+        if check_types.lower() in ['all', 'duplicates']:
+            report.append("🔍 DUPLICATE RECORDS ANALYSIS:")
+            duplicates = df.duplicated().sum()
+            if duplicates == 0:
+                report.append("  ✅ No duplicate rows found")
+            else:
+                issues_found += duplicates
+                duplicate_pct = (duplicates / len(df) * 100).round(2)
+                severity = "🔴" if duplicate_pct > 10 else "🟡" if duplicate_pct > 5 else "🟢"
+                report.append(f"  {severity} Duplicate rows: {duplicates} ({duplicate_pct}%)")
+            report.append("")
+        
+        # Check data types and format issues
+        if check_types.lower() in ['all', 'types']:
+            report.append("🔍 DATA TYPE ANALYSIS:")
+            type_issues = 0
+            
+            for col in df.columns:
+                col_type = df[col].dtype
+                if col_type == 'object':
+                    # Check if numeric data is stored as string
+                    try:
+                        numeric_conversion = pd.to_numeric(df[col], errors='coerce')
+                        non_numeric = numeric_conversion.isnull().sum() - df[col].isnull().sum()
+                        if non_numeric == 0 and not df[col].isnull().all():
+                            type_issues += 1
+                            report.append(f"    🟡 {col}: Numeric data stored as text")
+                    except:
+                        pass
+                    
+                    # Check for mixed case in categorical data
+                    if df[col].nunique() < len(df) * 0.5:  # Likely categorical
+                        unique_vals = df[col].dropna().astype(str)
+                        case_variants = unique_vals.str.lower().nunique() < unique_vals.nunique()
+                        if case_variants:
+                            type_issues += 1
+                            report.append(f"    🟡 {col}: Inconsistent case in categorical data")
+            
+            if type_issues == 0:
+                report.append("  ✅ No data type issues found")
+            else:
+                issues_found += type_issues
+                report.append(f"  ⚠️  Data type issues found: {type_issues}")
+            report.append("")
+        
+        # Check outliers in numeric columns
+        if check_types.lower() in ['all', 'outliers']:
+            report.append("🔍 OUTLIERS ANALYSIS:")
+            numeric_cols = df.select_dtypes(include=['number']).columns
+            
+            if len(numeric_cols) == 0:
+                report.append("  ℹ️  No numeric columns to check for outliers")
+            else:
+                outlier_cols = 0
+                for col in numeric_cols:
+                    Q1 = df[col].quantile(0.25)
+                    Q3 = df[col].quantile(0.75)
+                    IQR = Q3 - Q1
+                    lower_bound = Q1 - 1.5 * IQR
+                    upper_bound = Q3 + 1.5 * IQR
+                    
+                    outliers = ((df[col] < lower_bound) | (df[col] > upper_bound)).sum()
+                    if outliers > 0:
+                        outlier_cols += 1
+                        outlier_pct = (outliers / len(df) * 100).round(2)
+                        severity = "🔴" if outlier_pct > 10 else "🟡" if outlier_pct > 5 else "🟢"
+                        report.append(f"    {severity} {col}: {outliers} outliers ({outlier_pct}%)")
+                
+                if outlier_cols == 0:
+                    report.append("  ✅ No significant outliers found")
+                else:
+                    issues_found += outlier_cols
+            report.append("")
+        
+        # Summary
+        report.append("📊 QUALITY SUMMARY:")
+        if issues_found == 0:
+            report.append("  🎉 Excellent! No major data quality issues detected")
+        else:
+            severity = "🔴 Poor" if issues_found > 20 else "🟡 Fair" if issues_found > 10 else "🟢 Good"
+            report.append(f"  Data Quality: {severity}")
+            report.append(f"  Total issues detected: {issues_found}")
+            report.append("\n💡 RECOMMENDATIONS:")
+            if check_types.lower() in ['all', 'missing'] and df.isnull().sum().sum() > 0:
+                report.append("  • Handle missing values using imputation or removal")
+            if check_types.lower() in ['all', 'duplicates'] and df.duplicated().sum() > 0:
+                report.append("  • Remove or investigate duplicate records")
+            if check_types.lower() in ['all', 'types']:
+                report.append("  • Convert data types for better performance and accuracy")
+            if check_types.lower() in ['all', 'outliers'] and len(df.select_dtypes(include=['number']).columns) > 0:
+                report.append("  • Investigate outliers - they may be errors or important insights")
+        
+        return "\n".join(report)
+        
+    except Exception as e:
+        return f"Data quality check failed: {str(e)}"
 
 # Create tool list / 创建工具列表
-tools = [search_tool, python_inter, fig_inter, sql_inter, extract_data]
+tools = [search_tool, python_inter, fig_inter, sql_inter, extract_data, 
+         export_data, data_preview, quick_chart, query_history, data_quality_check]
 
 # Create model / 创建模型
-model = ChatDeepSeek(model="deepseek-chat")
+model = ChatOpenAI(
+    model=os.getenv('MODEL_NAME'),
+    api_key=os.getenv('OPENAI_API_KEY'),
+    temperature=0.2
+)
 
 # Create graph (Agent) / 创建图 （Agent）
 graph = create_react_agent(model=model, tools=tools, prompt=prompt)

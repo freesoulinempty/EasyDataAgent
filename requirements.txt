@@ -1,7 +1,7 @@
 langgraph-cli[inmem]
 langgraph
 langchain-core
-langchain-deepseek
+langchain-openai
 langchain-tavily
 python-dotenv
 langsmith
@@ -11,3 +11,6 @@ seaborn
 pandas
 pymysql
 scikit-learn
+openpyxl
+reportlab
+cryptography
