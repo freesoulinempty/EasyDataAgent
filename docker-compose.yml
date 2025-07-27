@@ -1,0 +1,142 @@
+version: '3.8'
+
+services:
+  # Redis Service (required by LangGraph)
+  redis:
+    image: redis:6
+    container_name: easydataagent-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - easydataagent-network
+    healthcheck:
+      test: redis-cli ping
+      interval: 5s
+      timeout: 1s
+      retries: 5
+
+  # PostgreSQL Service (required by LangGraph for state storage)
+  postgres:
+    image: postgres:16
+    container_name: easydataagent-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: langgraph
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - easydataagent-network
+    healthcheck:
+      test: pg_isready -U postgres
+      start_period: 10s
+      timeout: 1s
+      retries: 5
+      interval: 5s
+
+  # MySQL Database Service (for your application data)
+  mysql:
+    image: mysql:8.0
+    container_name: easydataagent-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${DB_NAME:-test}
+      MYSQL_USER: ${USER:-gufang2020}
+      MYSQL_PASSWORD: ${MYSQL_PW:-gufang2020}
+    ports:
+      - "${PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql-init:/docker-entrypoint-initdb.d
+    networks:
+      - easydataagent-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 10s
+      retries: 5
+
+  # Backend Service (LangGraph API)
+  backend:
+    image: gugu689/data_agent:latest
+    container_name: easydataagent-backend
+    restart: unless-stopped
+    environment:
+      # LangGraph required environment variables
+      REDIS_URI: redis://redis:6379
+      DATABASE_URI: postgres://postgres:postgres@postgres:5432/langgraph?sslmode=disable
+      
+      # API Keys - these should be set in your .env file
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY}
+      LANGSMITH_TRACING: ${LANGSMITH_TRACING:-true}
+      LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-easy_data_agent}
+      TAVILY_API_KEY: ${TAVILY_API_KEY}
+      
+      # Model Configuration
+      MODEL_NAME: ${MODEL_NAME:-gpt-4.1-mini}
+      
+      # MySQL Database Configuration (for your application)
+      HOST: mysql
+      USER: ${USER:-gufang2020}
+      MYSQL_PW: ${MYSQL_PW:-gufang2020}
+      DB_NAME: ${DB_NAME:-test}
+      MYSQL_PORT: ${MYSQL_PORT:-3306}
+      
+      # Docker Path Configuration
+      PUBLIC_DIR: /app/shared/public
+      PROJECT_ROOT: /app
+    ports:
+      - "8123:8000"
+    volumes:
+      - shared_public:/app/shared/public
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    networks:
+      - easydataagent-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8123/ok"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Frontend Service (Next.js)
+  frontend:
+    build: 
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: easydataagent-frontend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      # Backend API URL for frontend to connect to backend
+      NEXT_PUBLIC_API_URL: http://localhost:8123
+    ports:
+      - "3000:3000"
+    volumes:
+      - shared_public:/app/public
+    depends_on:
+      - backend
+    networks:
+      - easydataagent-network
+
+volumes:
+  postgres_data:
+    driver: local
+  mysql_data:
+    driver: local
+  shared_public:
+    driver: local
+
+networks:
+  easydataagent-network:
+    driver: bridge

@@ -251,6 +251,22 @@ def python_inter(py_code):
     This function can execute Python code and return the final result. Note that this function can only execute non-plotting code.
     For plotting-related code, use the fig_inter function.
     """    
+    # Check if the code contains plotting operations
+    plotting_keywords = ['plt.savefig', 'plt.save', 'fig.savefig', 'plt.show', 'plt.plot', 'plt.scatter', 
+                        'plt.bar', 'plt.hist', 'plt.boxplot', 'sns.', 'seaborn']
+    if any(keyword in py_code for keyword in plotting_keywords):
+        return """⚠️ Plotting code detected! Please use the fig_inter function for visualization.
+
+The fig_inter function will:
+1. Execute your plotting code
+2. Save the image to the correct location
+3. Display it in the interface
+
+Example usage:
+fig_inter(py_code="YOUR_PLOTTING_CODE", fname="fig")
+
+Note: Your plotting code should create a figure object assigned to the variable name specified in 'fname'."""
+    
     g = globals()
     try:
         # Try to return expression result if it's an expression / 尝试如果是表达式，则返回表达式运行结果
@@ -280,25 +296,33 @@ def python_inter(py_code):
 # Create plotting tool / 创建绘图工具
 # Plotting tool structured parameter description / 绘图工具结构化参数说明
 class FigCodeInput(BaseModel):
-    py_code: str = Field(description="Python plotting code to execute, must use matplotlib/seaborn to create images and assign to variables")
-    fname: str = Field(description="Variable name of the image object, e.g., 'fig', used to extract from code and save as image")
+    py_code: str = Field(description="Python plotting code to execute, must use matplotlib/seaborn to create images and assign to descriptive variables")
+    fname: str = Field(description="Descriptive variable name for the image object (e.g., 'scatter_plot', 'correlation_heatmap') - NEVER use 'fig'")
 
 @tool(args_schema=FigCodeInput)
 def fig_inter(py_code: str, fname: str) -> str:
     """
     Call this function when users need to use Python for visualization plotting tasks.
 
-    Notes:
-    1. All plotting code must create an image object and assign it to the specified variable name (e.g., `fig`).
-    2. Must use `fig = plt.figure()` or `fig = plt.subplots()`.
-    3. Do not use `plt.show()`.
-    4. Ensure the code ends with `fig.tight_layout()`.
-    5. All text content in plotting code including axis labels (xlabel, ylabel), titles, legends must be in English.
+    CRITICAL: Use descriptive variable names, NOT 'fig'! Each visualization needs a unique name.
+
+    Args:
+        py_code: Python plotting code
+        fname: Variable name for the plot object - MUST be descriptive (e.g., 'scatter_plot', 'correlation_heatmap')
+
+    Rules:
+    1. Variable name MUST match fname parameter exactly
+    2. Use descriptive names like 'scatter_plot', 'sales_trend', 'correlation_heatmap'
+    3. NEVER use 'fig' - it causes file overwrites
+    4. Create plot with: variable_name, ax = plt.subplots()
+    5. End code with: variable_name.tight_layout()
 
     Example code:
-    fig = plt.figure(figsize=(10,6))
-    plt.plot([1,2,3], [4,5,6])
-    fig.tight_layout()
+    scatter_plot, ax = plt.subplots(figsize=(10,6))
+    ax.scatter(data['x'], data['y'])
+    scatter_plot.tight_layout()
+    
+    Then call: fig_inter(code, "scatter_plot")
     """
     # Optional debug output for monitoring tool usage
     # 可选的调试输出用于监控工具使用
@@ -325,7 +349,8 @@ def fig_inter(py_code: str, fname: str) -> str:
             rel_path = os.path.join("images", image_filename)    # Return relative path (for frontend) / 返回相对路径（给前端用）
 
             fig.savefig(abs_path, bbox_inches='tight')
-            return f"Image saved successfully: {rel_path}\n\n---\n\n![Generated Chart]({rel_path})"
+            # Return markdown format for frontend display
+            return f"Image saved successfully: {rel_path}\n\n![Visualization]({rel_path})"
         else:
             return "Image object not found, please confirm the variable name is correct and is a matplotlib figure object."
     except Exception as e:
@@ -857,117 +882,6 @@ def data_preview(df_name: str, rows: int = 10) -> str:
         # 处理任何其他意外错误
         return f"Preview generation failed for '{df_name}': {str(e)}"
 
-# ============================================================================
-# QUICK CHART TEMPLATE TOOL CONFIGURATION
-# 快速图表模板工具配置
-# ============================================================================
-# Professional chart generation with predefined templates for rapid visualization
-# 使用预定义模板进行专业图表生成，实现快速可视化
-# ============================================================================
-class ChartTemplateSchema(BaseModel):
-    df_name: str = Field(description="Name of the pandas DataFrame variable for plotting")
-    chart_type: str = Field(description="Chart type: 'scatter', 'bar', 'heatmap'")
-    x_col: str = Field(description="Column name for X-axis")
-    y_col: str = Field(description="Column name for Y-axis")
-    title: str = Field(default="Chart", description="Chart title")
-
-@tool(args_schema=ChartTemplateSchema)
-def quick_chart(df_name: str, chart_type: str, x_col: str, y_col: str, title: str = "Chart") -> str:
-    """
-    Generate quick charts using predefined templates (scatter plot, bar chart, heatmap).
-    Provides instant visualization with professional styling and automatic layout.
-    
-    :param df_name: Name of the pandas DataFrame variable for plotting
-    :param chart_type: Type of chart - 'scatter', 'bar', or 'heatmap'
-    :param x_col: Column name for X-axis (not used for heatmap)
-    :param y_col: Column name for Y-axis (not used for heatmap)
-    :param title: Chart title
-    :return: Chart generation status and file path
-    """
-    try:
-        # Get DataFrame from global variables
-        g = globals()
-        if df_name not in g:
-            return f"Error: DataFrame '{df_name}' not found. Please extract or create the DataFrame first."
-        
-        df = g[df_name]
-        if not isinstance(df, pd.DataFrame):
-            return f"Error: '{df_name}' is not a pandas DataFrame."
-        
-        # Set up matplotlib for file saving
-        current_backend = matplotlib.get_backend()
-        matplotlib.use('Agg')
-        
-        # Create figure
-        try:
-            plt.style.use('seaborn-v0_8')
-        except:
-            # Fallback to default style if seaborn style fails
-            plt.style.use('default')
-        fig = plt.figure(figsize=(10, 6))
-        
-        if chart_type.lower() == 'scatter':
-            if x_col not in df.columns or y_col not in df.columns:
-                return f"Error: Columns '{x_col}' or '{y_col}' not found in DataFrame"
-            
-            plt.scatter(df[x_col], df[y_col], alpha=0.6, s=50)
-            plt.xlabel(x_col)
-            plt.ylabel(y_col)
-            plt.title(f"{title} - Scatter Plot")
-            plt.grid(True, alpha=0.3)
-            
-        elif chart_type.lower() == 'bar':
-            if x_col not in df.columns or y_col not in df.columns:
-                return f"Error: Columns '{x_col}' or '{y_col}' not found in DataFrame"
-            
-            # For bar charts, group by x_col and aggregate y_col
-            data = df.groupby(x_col)[y_col].mean().sort_values(ascending=False)
-            bars = plt.bar(range(len(data)), data.values)
-            plt.xlabel(x_col)
-            plt.ylabel(f"Average {y_col}")
-            plt.title(f"{title} - Bar Chart")
-            plt.xticks(range(len(data)), data.index, rotation=45, ha='right')
-            
-            # Color bars with gradient
-            colors = plt.cm.viridis([i/len(data) for i in range(len(data))])
-            for bar, color in zip(bars, colors):
-                bar.set_color(color)
-            
-        elif chart_type.lower() == 'heatmap':
-            # For heatmap, use correlation matrix of numeric columns
-            numeric_df = df.select_dtypes(include=['number'])
-            if numeric_df.empty:
-                return "Error: No numeric columns found for heatmap"
-            
-            corr = numeric_df.corr()
-            sns.heatmap(corr, annot=True, cmap='coolwarm', center=0,
-                       square=True, fmt='.2f', cbar_kws={'shrink': 0.8})
-            plt.title(f"{title} - Correlation Heatmap")
-            plt.tight_layout()
-            
-        else:
-            return f"Error: Unsupported chart type '{chart_type}'. Supported types: scatter, bar, heatmap"
-        
-        # Save figure
-        base_dir = os.getenv('PUBLIC_DIR', "/app/shared/public")
-        images_dir = os.path.join(base_dir, "images")
-        os.makedirs(images_dir, exist_ok=True)
-        
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"quick_{chart_type}_{timestamp}.png"
-        abs_path = os.path.join(images_dir, filename)
-        rel_path = os.path.join("images", filename)
-        
-        fig.tight_layout()
-        fig.savefig(abs_path, bbox_inches='tight', dpi=300)
-        
-        return f"Chart saved successfully: {rel_path}\n\n---\n\n![{title} - {chart_type.title()} Chart]({rel_path})"
-        
-    except Exception as e:
-        return f"Chart generation failed: {str(e)}"
-    finally:
-        plt.close('all')
-        matplotlib.use(current_backend)
 
 # Create SQL query history tool / 创建SQL查询历史工具
 class QueryHistorySchema(BaseModel):
@@ -1441,10 +1355,10 @@ def data_quality_check(df_name: str, check_types: str = "all") -> str:
 # 4. DATABASE OPERATIONS / 数据库操作: sql_inter, extract_data (MySQL integration)
 # 5. DATA MANAGEMENT / 数据管理: export_data (multi-format export)
 # 6. QUALITY ASSURANCE / 质量保证: data_preview, data_quality_check (data validation)
-# 7. EFFICIENCY TOOLS / 效率工具: quick_chart (template charts), query_history (SQL management)
+# 7. EFFICIENCY TOOLS / 效率工具: query_history (SQL management)
 
 tools = [search_tool, python_inter, fig_inter, sql_inter, extract_data, 
-         export_data, data_preview, quick_chart, query_history, data_quality_check]
+         export_data, data_preview, query_history, data_quality_check]
 
 model = ChatOpenAI(
     model=os.getenv('MODEL_NAME'),        

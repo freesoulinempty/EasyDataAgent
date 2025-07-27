@@ -1,0 +1,64 @@
+version: '3.8'
+
+services:
+  # Backend Service (从 Docker Hub 拉取)
+  backend:
+    image: gugu689/data_agent:latest
+    container_name: easydataagent-backend
+    restart: unless-stopped
+    environment:
+      # LangGraph required environment variables
+      REDIS_URI: ${REDIS_URI}
+      DATABASE_URI: ${DATABASE_URI}
+      
+      # API Keys - 用户需要在 .env 中设置
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY}
+      LANGSMITH_TRACING: ${LANGSMITH_TRACING:-true}
+      LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-easy_data_agent}
+      TAVILY_API_KEY: ${TAVILY_API_KEY}
+      
+      # Model Configuration
+      MODEL_NAME: ${MODEL_NAME:-gpt-4-mini}
+      
+      # MySQL Database Configuration (您的应用数据)
+      HOST: ${HOST}  # 用户的 MySQL 地址
+      USER: ${USER}
+      MYSQL_PW: ${MYSQL_PW}
+      DB_NAME: ${DB_NAME}
+      PORT: ${PORT:-3306}
+      
+      # Docker Path Configuration
+      PUBLIC_DIR: /app/shared/public
+      PROJECT_ROOT: /app
+    ports:
+      - "8123:8000"
+    volumes:
+      - shared_public:/app/shared/public
+    networks:
+      - easydataagent-network
+
+  # Frontend Service (从 Docker Hub 拉取)
+  frontend:
+    image: yourusername/easydataagent-frontend:latest
+    container_name: easydataagent-frontend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: http://localhost:8123
+    ports:
+      - "3000:3000"
+    volumes:
+      - shared_public:/app/public
+    depends_on:
+      - backend
+    networks:
+      - easydataagent-network
+
+volumes:
+  shared_public:
+    driver: local
+
+networks:
+  easydataagent-network:
+    driver: bridge
